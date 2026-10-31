@@ -1,18 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jwtVerify } from "jose";
+import { SESSION_COOKIE, verifySessionToken } from "@/features/auth/server/token";
 
-const key = new TextEncoder().encode(process.env.SESSION_SECRET);
+const AUTH_PAGES = new Set(["/login", "/signup"]);
 
-// Optimistic check only. The real check happens again on the server (getCurrentUser).
+// Optimistic check only (no database). The authoritative check is getCurrentUser().
 export async function proxy(req: NextRequest) {
-  const token = req.cookies.get("briefai_session")?.value;
-  const loggedIn = token ? await jwtVerify(token, key).then(() => true, () => false) : false;
   const { pathname } = req.nextUrl;
+  const session = await verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value, process.env.SESSION_SECRET ?? "");
 
-  if (pathname.startsWith("/dashboard") && !loggedIn) {
-    return NextResponse.redirect(new URL("/login", req.url));
+  if (pathname.startsWith("/dashboard") && !session) {
+    const url = new URL("/login", req.url);
+    return NextResponse.redirect(url);
   }
-  if ((pathname === "/login" || pathname === "/signup") && loggedIn) {
+  if (AUTH_PAGES.has(pathname) && session) {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
   return NextResponse.next();
