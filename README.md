@@ -4,12 +4,13 @@ Turn messy meeting notes into a short summary and a clear list of action items.
 
 BriefAI is a small but complete AI SaaS starter. It shows the parts every real AI product needs: sign up and login, a database, a protected dashboard, a server-side AI call with structured output, input validation, and a free-plan usage limit.
 
-Built for the YouTube tutorial on [@osamaayubdev](https://www.youtube.com/@osamaayubdev).
+Built for the YouTube tutorial on [@osamaayubdev](https://www.youtube.com/@osamaayubdev): [watch the build](https://youtu.be/AF0uYuU0z_M). The code exactly as shown in the video is on the [`video-version`](https://github.com/osamaayub/briefai/tree/video-version) branch; `main` has the refactored, production-style architecture described below.
 
 ## Features
 
 - Email and password auth (bcrypt hashing, signed JWT in an httpOnly cookie)
 - Route protection with Next.js `proxy.ts`, plus a real check on the server for every action
+- Race-safe daily limits, structured logging, security headers, unit tests and CI
 - SQLite locally, Turso (libSQL) in production, with Drizzle ORM
 - OpenAI Responses API with structured output (Zod schema): title, summary, action items
 - Your API key stays on the server and never reaches the browser
@@ -29,79 +30,115 @@ Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · Drizzle 
 git clone https://github.com/osamaayub/briefai.git
 cd briefai
 npm install
-cp .env.example .env.local
-```
-
-Set `SESSION_SECRET` in `.env.local` to a long random string:
-
-```bash
-openssl rand -base64 32
-```
-
-Create the database tables and start the app:
-
-```bash
-npx drizzle-kit push
+cp .env.example .env.local      # set SESSION_SECRET (openssl rand -base64 32)
+npm run db:migrate              # create the tables from drizzle/ migrations
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. Without `OPENAI_API_KEY` the app runs in **demo mode**, which uses a simple local rule instead of AI.
 
-Without `OPENAI_API_KEY` the app runs in **demo mode**, which uses a simple local rule instead of AI. Add your key to `.env.local` to use the real model.
+## Scripts
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` / `build` / `start` | Next.js |
+| `npm run check` | Lint, type-check and unit tests |
+| `npm test` | Vitest unit tests |
+| `npm run db:generate` | Create a new SQL migration after editing the schema |
+| `npm run db:migrate` | Apply migrations |
+| `npm run db:studio` | Browse the database |
 
 ## Environment variables
 
+Validated with Zod on first use (`src/server/env.ts`). A missing or invalid value fails fast with a clear message.
+
 | Name | Required | Description |
 | --- | --- | --- |
-| `SESSION_SECRET` | Yes | Secret used to sign the session cookie |
-| `OPENAI_API_KEY` | No | Your OpenAI key. Empty means demo mode |
-| `OPENAI_MODEL` | No | Model name, default `gpt-5-mini` |
-| `DATABASE_URL` | No | `file:local.db` locally, your Turso URL in production |
+| `SESSION_SECRET` | Yes | 32+ characters, signs the session cookie |
+| `OPENAI_API_KEY` | No | Empty means demo mode |
+| `OPENAI_MODEL` | No | Default `gpt-5-mini` |
+| `DATABASE_URL` | No | `file:local.db` locally, Turso URL in production |
 | `DATABASE_AUTH_TOKEN` | Prod | Turso auth token |
-| `FREE_DAILY_LIMIT` | No | Free briefs per user per day, default 5 |
+| `FREE_DAILY_LIMIT` | No | Briefs per user per day, default 5 |
 
-## Project structure
+## Architecture
+
+Feature-first structure with clear layers. Each layer only depends on the one below it.
 
 ```
 src/
-  proxy.ts               Optimistic redirect for /dashboard, /login, /signup
-  actions/
-    auth.ts              signup, login, logout (Server Actions)
-    briefs.ts            generateBrief, deleteBrief (Server Actions)
-  app/
-    page.tsx             Landing page
-    (auth)/login         Login page
-    (auth)/signup        Sign-up page
-    dashboard/page.tsx   Protected dashboard (streams behind Suspense)
-  components/            AuthForm, GenerateForm, BriefCard, Logo
-  db/
-    schema.ts            users and briefs tables
-    index.ts             Drizzle client (libSQL)
-  lib/
-    session.ts           JWT cookie: create, verify, delete
-    auth.ts              getCurrentUser (Data Access Layer)
-    ai.ts                OpenAI call with a Zod schema, plus demo mode
-    usage.ts             Daily usage count
+  app/                         Routes only: pages, layouts, error and loading UI
+  proxy.ts                     Optimistic redirects (no database)
+  components/                  Shared UI (Logo, FormError, SubmitButton)
+  lib/result.ts                Result and ActionState types
+  server/
+    env.ts                     Typed, validated configuration
+    logger.ts                  Structured JSON logs
+    db/schema.ts, client.ts    Drizzle schema, indexes, client
+  features/
+    auth/
+      actions.ts               Server Actions: signup, login, logout
+      schemas.ts               Zod input schemas
+      components/              AuthForm
+      server/
+        token.ts               JWT sign/verify (pure, shared with proxy)
+        session.ts             Cookie handling
+        password.ts            bcrypt with timing-safe failed logins
+        user-repository.ts     All user SQL
+        current-user.ts        Data Access Layer (request-deduped)
+    briefs/
+      actions.ts               Thin Server Actions: auth, call service, refresh
+      schemas.ts, types.ts     Input and AI output schemas, domain types
+      components/              GenerateForm, BriefList, BriefCard, UsageCard
+      server/
+        brief-service.ts       Business rules (framework-free, unit-tested)
+        brief-repository.ts    All brief SQL, atomic limit insert
+        ai/generator.ts        BriefGenerator interface (port)
+        ai/openai-generator.ts OpenAI adapter (structured output, retries, timeout)
+        ai/demo-generator.ts   Offline adapter
+        index.ts               Composition root: wires adapters into the service
 ```
 
-## How a brief is created
+### Request flow: generating a brief
 
-1. The user submits the form. `generateBrief` runs on the server.
-2. `getCurrentUser()` checks the session. The client is never trusted.
-3. Zod validates the notes (length limits stop abuse and runaway costs).
-4. The daily limit is checked in the database.
-5. `createBrief()` calls OpenAI with a Zod schema, so the result is typed JSON.
-6. The brief is saved and the dashboard refreshes.
+```
+Form (useActionState)
+  -> generateBrief (Server Action)       authenticate with getCurrentUser()
+    -> briefService.generate()           validate, check limit, call AI
+      -> BriefGenerator.generate()       OpenAI or demo, behind one interface
+      -> briefRepository.insertWithinLimit()   count + insert in one transaction
+  <- Result<Brief, BriefError>           expected failures are values, not exceptions
+  -> refresh()                           dashboard re-renders with the new brief
+```
+
+### Design decisions
+
+- **Service layer with dependency injection.** `createBriefService({ repo, generator, dailyLimit })` has no Next.js, SDK or database imports, so the business rules are tested with fakes in milliseconds.
+- **Ports and adapters for AI.** Adding Anthropic or Gemini means writing one class that implements `BriefGenerator` and choosing it in `ai/index.ts`.
+- **Race-safe usage limits.** The limit is checked before the AI call (to avoid paying for a brief the user can't keep) and enforced again atomically in a write transaction. Eight parallel requests cannot go over the limit.
+- **Results, not exceptions,** for expected failures (`INVALID_INPUT`, `LIMIT_REACHED`, `AI_FAILED`). Unexpected errors are logged and hit the route's `error.tsx`.
+- **Security.** httpOnly signed cookies, server-side authorisation in every action, ownership checks on delete, constant-time-ish failed logins (no email enumeration), input length limits, security headers, `server-only` on every module that reads secrets or the database.
+- **Migrations, not `push`.** SQL migrations are committed in `drizzle/` and applied in CI and deploys. A composite index on `(user_id, created_at)` backs the dashboard and limit queries.
+- **CI.** GitHub Actions runs lint, type-check, tests, migrations and a production build on every push.
+
+## Tests
+
+```bash
+npm test
+```
+
+Covers the brief service (creation, validation, daily limit, per-user limits, AI failure, ownership), the demo generator, auth schemas and session tokens.
 
 ## Deploy
 
 1. Create a database on [Turso](https://turso.tech) and copy the URL and token.
-2. Run `npx drizzle-kit push` with `DATABASE_URL` and `DATABASE_AUTH_TOKEN` set to your Turso values.
+2. Run `npm run db:migrate` with `DATABASE_URL` and `DATABASE_AUTH_TOKEN` set to your Turso values.
 3. Import the repo on [Vercel](https://vercel.com) and add the environment variables above.
 4. Set a spending limit in your OpenAI account.
 
 ## Ideas to extend it
 
+- Login rate limiting (for example Upstash Ratelimit) and email verification
 - Stripe subscriptions for a Pro plan with a higher limit
 - Streaming responses
 - Teams and shared briefs
