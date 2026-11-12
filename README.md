@@ -4,7 +4,7 @@ Turn messy meeting notes into a short summary and a clear list of action items.
 
 BriefAI is a small but complete AI SaaS starter. It shows the parts every real AI product needs: sign up and login, a database, a protected dashboard, a server-side AI call with structured output, input validation, and a free-plan usage limit.
 
-Built for the YouTube tutorial on [@osamaayubdev](https://www.youtube.com/@osamaayubdev): [watch the build](https://youtu.be/AF0uYuU0z_M). The code exactly as shown in the video is on the [`video-version`](https://github.com/osamaayub/briefai/tree/video-version) branch; `main` has the refactored, production-style architecture described below.
+Built for the YouTube tutorial on [@osamaayubdev](https://www.youtube.com/@osamaayubdev): [watch the build](https://youtu.be/AlgmQzrKSTk). The code exactly as shown in the video is on the [`video-version`](https://github.com/osamaayub/briefai/tree/video-version) branch; `main` has the refactored, production-style architecture described below.
 
 ## Features
 
