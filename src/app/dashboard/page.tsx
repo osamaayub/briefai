@@ -46,7 +46,7 @@ async function Dashboard() {
       </div>
       <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
         <div className="space-y-4">
-          <GenerateForm remaining={usage.remaining} />
+          <GenerateForm remaining={usage.remaining} requestId={crypto.randomUUID()} />
           <UsageCard used={usage.used} limit={usage.limit} />
         </div>
         <BriefList briefs={briefs} />

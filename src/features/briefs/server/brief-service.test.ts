@@ -12,7 +12,11 @@ function fakeRepo(): BriefRepository & { rows: Brief[] } {
     rows,
     listByUser: async (userId) => rows.filter((r) => r.userId === userId),
     countSince: async (userId, since) => rows.filter((r) => r.userId === userId && r.createdAt >= since).length,
+    findByRequestId: async (userId, requestId) =>
+      rows.find((r) => r.userId === userId && r.requestId === requestId) ?? null,
     insertWithinLimit: async (data: NewBrief, limit, since) => {
+      const dup = data.requestId && rows.find((r) => r.userId === data.userId && r.requestId === data.requestId);
+      if (dup) return dup;
       const n = rows.filter((r) => r.userId === data.userId && r.createdAt >= since).length;
       if (n >= limit) return null;
       const row = { ...data, id: String(rows.length + 1), createdAt: new Date() };
@@ -82,6 +86,53 @@ describe("briefService.generate", () => {
     expect(result).toMatchObject({ ok: false, error: "AI_FAILED" });
     expect(onError).toHaveBeenCalledOnce();
     expect(repo.rows).toHaveLength(0);
+  });
+});
+
+describe("briefService.generate idempotency", () => {
+  const KEY = "3f1c2b9e-8a4d-4c6e-9b2f-1a2b3c4d5e6f";
+
+  it("returns the same brief for a repeated request key without a second AI call or credit", async () => {
+    const generate = vi.fn(okGenerator.generate);
+    const { service, repo } = setup({ generator: { model: "fake", generate } });
+    const first = await service.generate("u1", NOTES, KEY);
+    const retry = await service.generate("u1", NOTES, KEY);
+    expect(first.ok && retry.ok).toBe(true);
+    if (first.ok && retry.ok) expect(retry.value.id).toBe(first.value.id);
+    expect(repo.rows).toHaveLength(1);
+    expect(generate).toHaveBeenCalledOnce();
+    expect(await service.usage("u1")).toMatchObject({ used: 1 });
+  });
+
+  it("still returns the saved brief on retry when the user is now at the limit", async () => {
+    const { service } = setup({ dailyLimit: 1 });
+    expect((await service.generate("u1", NOTES, KEY)).ok).toBe(true);
+    expect((await service.generate("u1", NOTES, KEY)).ok).toBe(true);
+  });
+
+  it("treats different keys as different requests", async () => {
+    const { service, repo } = setup();
+    await service.generate("u1", NOTES, KEY);
+    await service.generate("u1", NOTES, "9d8c7b6a-5f4e-4d3c-8b2a-0f1e2d3c4b5a");
+    expect(repo.rows).toHaveLength(2);
+  });
+
+  it("does not share keys between users", async () => {
+    const { service, repo } = setup();
+    await service.generate("u1", NOTES, KEY);
+    await service.generate("u2", NOTES, KEY);
+    expect(repo.rows).toHaveLength(2);
+  });
+
+  it("rejects a malformed key", async () => {
+    const { service } = setup();
+    expect(await service.generate("u1", NOTES, "not-a-uuid")).toMatchObject({ ok: false, error: "INVALID_INPUT" });
+  });
+
+  it("works without a key, like before", async () => {
+    const { service } = setup();
+    expect((await service.generate("u1", NOTES)).ok).toBe(true);
+    expect((await service.generate("u1", NOTES, "")).ok).toBe(true);
   });
 });
 

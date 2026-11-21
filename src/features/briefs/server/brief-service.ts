@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@/lib/result";
-import { NotesSchema } from "../schemas";
+import { NotesSchema, RequestIdSchema } from "../schemas";
 import type { Brief } from "../types";
 import type { BriefGenerator } from "./ai/generator";
 import type { BriefRepository } from "./brief-repository";
@@ -35,10 +35,25 @@ export function createBriefService({ repo, generator, dailyLimit, now = () => ne
       return { used, limit: dailyLimit, remaining: Math.max(0, dailyLimit - used) };
     },
 
-    async generate(userId: string, rawNotes: unknown): Promise<Result<Brief, BriefError>> {
+    /**
+     * `rawRequestId` is an idempotency key from the form. Sending the same key
+     * twice (double click, network retry) returns the first brief and does not
+     * use a second credit.
+     */
+    async generate(userId: string, rawNotes: unknown, rawRequestId?: unknown): Promise<Result<Brief, BriefError>> {
       const parsed = NotesSchema.safeParse(rawNotes);
       if (!parsed.success) return err("INVALID_INPUT", parsed.error.issues[0].message);
       const notes = parsed.data;
+
+      const key = RequestIdSchema.safeParse(rawRequestId);
+      if (!key.success) return err("INVALID_INPUT", "Invalid request. Please reload the page and try again.");
+      const requestId = key.data ?? null;
+
+      // Already handled this exact request: return the same brief, no AI call, no credit.
+      if (requestId) {
+        const existing = await repo.findByRequestId(userId, requestId);
+        if (existing) return ok(existing);
+      }
 
       // Cheap pre-check so we don't pay for an AI call the user can't keep.
       if ((await repo.countSince(userId, startOfDay())) >= dailyLimit) {
@@ -55,7 +70,7 @@ export function createBriefService({ repo, generator, dailyLimit, now = () => ne
 
       // Authoritative, atomic check at write time.
       const saved = await repo.insertWithinLimit(
-        { ...content, userId, source: notes, model: generator.model },
+        { ...content, userId, source: notes, model: generator.model, requestId },
         dailyLimit,
         startOfDay(),
       );

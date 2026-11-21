@@ -11,8 +11,9 @@ export type GenerateState = ActionState<{ notes: string }>;
 export async function generateBrief(_: GenerateState, formData: FormData): Promise<GenerateState> {
   const user = await getCurrentUser(); // never trust the client
   const notes = String(formData.get("notes") ?? "");
+  const requestId = formData.get("requestId"); // validated in the service
 
-  const result = await briefService().generate(user.id, notes);
+  const result = await briefService().generate(user.id, notes, requestId);
   if (!result.ok) return { status: "error", message: result.message, fields: { notes } };
 
   logger.info("brief.created", { userId: user.id, briefId: result.value.id, model: result.value.model });

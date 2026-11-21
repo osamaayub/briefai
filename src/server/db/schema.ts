@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
 const createdAt = () => integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date());
@@ -21,10 +21,17 @@ export const briefs = sqliteTable(
     actionItems: text("action_items", { mode: "json" }).$type<string[]>().notNull(),
     source: text("source").notNull(),
     model: text("model").notNull(),
+    // Idempotency key sent by the form. A double click or a retry sends the
+    // same key, so it can never create two briefs or use two credits.
+    requestId: text("request_id"),
     createdAt: createdAt(),
   },
-  // Every dashboard query and the daily limit filter by user and date.
-  (t) => [index("briefs_user_created_idx").on(t.userId, t.createdAt)],
+  (t) => [
+    // Every dashboard query and the daily limit filter by user and date.
+    index("briefs_user_created_idx").on(t.userId, t.createdAt),
+    // One brief per key per user. NULLs (old rows) do not collide in SQLite.
+    uniqueIndex("briefs_user_request_idx").on(t.userId, t.requestId),
+  ],
 );
 
 export type UserRow = typeof users.$inferSelect;

@@ -17,3 +17,6 @@ export const BriefContentSchema = z.object({
 });
 
 export type BriefContent = z.infer<typeof BriefContentSchema>;
+
+/** Idempotency key the form sends with each submit. Optional so old clients still work. */
+export const RequestIdSchema = z.preprocess((v) => (v === "" || v === null ? undefined : v), z.uuid().optional());

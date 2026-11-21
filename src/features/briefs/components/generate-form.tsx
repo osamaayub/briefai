@@ -6,7 +6,12 @@ import { SubmitButton } from "@/components/submit-button";
 import { NOTES_MAX } from "../schemas";
 import { generateBrief, type GenerateState } from "../actions";
 
-export function GenerateForm({ remaining }: { remaining: number }) {
+/**
+ * `requestId` is a fresh idempotency key made by the server on every render.
+ * Every submit of this form sends it, so a double click or a retry is handled
+ * once. After a success the page refreshes and the form gets a new key.
+ */
+export function GenerateForm({ remaining, requestId }: { remaining: number; requestId: string }) {
   const [state, action, pending] = useActionState<GenerateState, FormData>(generateBrief, { status: "idle" });
   const notes = state.status === "error" ? state.fields?.notes : undefined;
 
@@ -16,6 +21,7 @@ export function GenerateForm({ remaining }: { remaining: number }) {
         <h2 className="font-semibold">New brief</h2>
         <span className="text-xs text-slate-400">{remaining} free left today</span>
       </div>
+      <input type="hidden" name="requestId" value={requestId} />
       <label htmlFor="notes" className="sr-only">Meeting notes</label>
       <textarea
         id="notes"

@@ -5,6 +5,7 @@ export type Brief = BriefContent & {
   userId: string;
   source: string;
   model: string;
+  requestId: string | null;
   createdAt: Date;
 };
 
