@@ -10,7 +10,7 @@ Built for the YouTube tutorial on [@osamaayubdev](https://www.youtube.com/@osama
 
 - Email and password auth (bcrypt hashing, signed JWT in an httpOnly cookie)
 - Route protection with Next.js `proxy.ts`, plus a real check on the server for every action
-- Race-safe daily limits, structured logging, security headers, unit tests and CI
+- Race-safe daily limits, idempotent submits, structured logging, security headers, unit tests and CI
 - SQLite locally, Turso (libSQL) in production, with Drizzle ORM
 - OpenAI Responses API with structured output (Zod schema): title, summary, action items
 - Your API key stays on the server and never reaches the browser
@@ -115,7 +115,8 @@ Form (useActionState)
 
 - **Service layer with dependency injection.** `createBriefService({ repo, generator, dailyLimit })` has no Next.js, SDK or database imports, so the business rules are tested with fakes in milliseconds.
 - **Ports and adapters for AI.** Adding Anthropic or Gemini means writing one class that implements `BriefGenerator` and choosing it in `ai/index.ts`.
-- **Race-safe usage limits.** The limit is checked before the AI call (to avoid paying for a brief the user can't keep) and enforced again atomically in a write transaction. Eight parallel requests cannot go over the limit.
+- **Race-safe usage limits.** The limit is checked before the AI call (to avoid paying for a brief the user can't keep) and enforced again atomically in a write transaction (`BEGIN IMMEDIATE`). Writes are queued in-process and local SQLite waits for the lock instead of failing with `SQLITE_BUSY`. Eight parallel requests cannot go over the limit; a real-SQLite test proves it.
+- **Idempotent submits.** The form sends a server-made `requestId` with each submit. A double click or a retry with the same key returns the first brief, with no second AI call and no second credit. A unique index on `(user_id, request_id)` backs this up at the database level.
 - **Results, not exceptions,** for expected failures (`INVALID_INPUT`, `LIMIT_REACHED`, `AI_FAILED`). Unexpected errors are logged and hit the route's `error.tsx`.
 - **Security.** httpOnly signed cookies, server-side authorisation in every action, ownership checks on delete, constant-time-ish failed logins (no email enumeration), input length limits, security headers, `server-only` on every module that reads secrets or the database.
 - **Migrations, not `push`.** SQL migrations are committed in `drizzle/` and applied in CI and deploys. A composite index on `(user_id, created_at)` backs the dashboard and limit queries.
